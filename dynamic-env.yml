@@ -1,0 +1,12 @@
+name: dynamic
+channels:
+- conda-forge
+dependencies:
+- python=3.6
+- notebook
+- pip
+- pip:
+  - scipy
+  - numpy
+  - tensorflow-gpu==2.1
+- scikit-learn
