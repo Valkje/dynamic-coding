@@ -52,3 +52,11 @@ where the parameters indicate the following:
 The returned variable is:
 
 * `cross_cos_amp`: a `trials` by `timesteps` by `timesteps` array of decodability values, i.e. a CTDA for every trial from `data`.
+
+## Jupyter notebooks
+
+Two Jupyter notebooks have been added that have been involved in personal use and can serve as examples. `analyse_decode_mem.ipynb` makes use of `wolff.py` to calculate decodability curves, while `analyse_cross.ipynb` uses `wolff_cross.py` to calculate CTDAs.
+
+## Conda environment
+
+A Conda environment file, called `dynamic-env.yml`, has been added to quickly set up the required dependencies.
