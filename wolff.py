@@ -1,6 +1,7 @@
+# Code adapted from Wolff et al. (2017)
+
 import numpy as np
 from scipy.spatial import distance
-from IPython.display import clear_output, display
 import multiprocessing
 from functools import partial
 
@@ -18,8 +19,7 @@ def similarity(data, theta, angspace, bin_width):
     cos_amp = np.empty((num_trials, timesteps))
 
     for trl in range(0, num_trials):
-        clear_output(wait=True)
-        display("Trial " + str(trl+1) + "/" + str(num_trials))
+        print("Trial " + str(trl+1) + "/" + str(num_trials), end='\r')
         # Get all data except trl
         trn_dat = data[np.arange(num_trials) != trl, :, :]
         # Get all angles except the one associated with trl
@@ -34,12 +34,10 @@ def similarity(data, theta, angspace, bin_width):
             m[b, :, :] = np.mean(trn_dat[angle_dists < bin_width, : , :], 0)
 
         for ti in range(0, timesteps):
-            # Using np.cov gives different results than the matlab script
+            # Using np.cov gives different results than the Wolff et al. script, covdiag should be used
             sigma = covdiag(trn_dat[:, :, ti])
             sigma = np.linalg.pinv(sigma)
             # Calculate the distances between the trial and all angle bins
-            # distances[trl, i, ti] = distance.mahalanobis(m[i, :, ti], data[trl, :, ti], sigma)
-#             distances[trl, :, ti] = np.array([distance.mahalanobis(means, data[trl, :, ti], sigma) for means in m[:, :, ti]])
             distances[trl, :, ti] = mahalanobis(m[:, :, ti], data[trl, :, ti], sigma)
 
             # Convolve cosine of angspace with distances
@@ -47,11 +45,12 @@ def similarity(data, theta, angspace, bin_width):
             # cosine (higher distance means higher value), the value is reversed
             # for ease of interpretation, so that higher values mean better
             # decoding
-            cos_amp[trl, ti] = -(np.mean(np.cos(angspace) * distances[trl, :, ti].T))
-#             cos_amp[trl, ti] = np.mean(np.cos(angspace) * -distances[trl, :, ti].T)
+            mean_centred = distances[trl, :, ti].T - np.mean(distances[trl, :, ti])
+            cos_amp[trl, ti] = -(np.mean(np.cos(angspace) * mean_centred))
 
     return (cos_amp, distances)
 
+# A parallellised version of similarity that is considerably faster
 def similarity_p(data, theta, angspace, bin_width, num_cores):
     num_trials = data.shape[0]
     num_channels = data.shape[1]
@@ -60,21 +59,19 @@ def similarity_p(data, theta, angspace, bin_width, num_cores):
     cos_amp = np.zeros((num_trials, timesteps))
     distances = np.zeros((num_trials, len(angspace), timesteps))
     
+    # Apply the function calc_sim partially...
     calc_sim_part = partial(calc_sim, data, theta, angspace, bin_width)
     
-#     if __name__ == '__main__':
+    # ...and then run it in parallel
     with multiprocessing.Pool(num_cores) as pool:
         calcs = pool.imap(calc_sim_part, [trl for trl in range(num_trials)], chunksize=10)
         for trl in range(num_trials):
             (cos_amp[trl,], distances[trl,]) = next(calcs)
-            clear_output(wait=True)
-            print(trl+1)
+            print(str(trl+1) + "/" + str(num_trials), end='\r')
 
     return (cos_amp, distances)
 
 def calc_sim(data, theta, angspace, bin_width, trl):
-#     print(trl)
-    
     num_trials = data.shape[0]
     num_channels = data.shape[1]
     timesteps = data.shape[2]
@@ -98,12 +95,10 @@ def calc_sim(data, theta, angspace, bin_width, trl):
         m[b, :, :] = np.mean(trn_dat[angle_dists < bin_width, : , :], 0)
 
     for ti in range(0, timesteps):
-        # Using np.cov gives different results than the matlab script
+        # Using np.cov gives different results than the Wolff et al. script, covdiag should be used
         sigma = covdiag(trn_dat[:, :, ti])
         sigma = np.linalg.pinv(sigma)
         # Calculate the distances between the trial and all angle bins
-        # distances[trl, i, ti] = distance.mahalanobis(m[i, :, ti], data[trl, :, ti], sigma)
-#             distances[trl, :, ti] = np.array([distance.mahalanobis(means, data[trl, :, ti], sigma) for means in m[:, :, ti]])
         distances[:, ti] = mahalanobis(m[:, :, ti], data[trl, :, ti], sigma)
 
         # Convolve cosine of angspace with distances

@@ -1,10 +1,11 @@
+# Code adapted from Wolff et al. (2017)
+
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import distance
 from sklearn.cluster import KMeans
 import multiprocessing
 from functools import partial
-import time
 import os
 
 import wolff
@@ -12,6 +13,7 @@ import wolff
 # Track calculation errors
 np.seterr('raise')
 
+# A helper function to prepare_sigma
 def cov_mats(data, trl):
     num_trials = data.shape[0]
     num_channels = data.shape[1]
@@ -20,10 +22,12 @@ def cov_mats(data, trl):
     trn_dat = data[np.arange(num_trials) != trl, :, :]
     sigma = np.empty((timesteps, num_channels, num_channels))
     for ti in range(timesteps):
+        # Calculate inverse covariance matrix for all data except data[trl] at time step ti
         sigma[ti, :, :] = np.linalg.pinv(wolff.covdiag(trn_dat[:, :, ti]))
 
     return sigma
     
+# Prepare all the inverse covariance matrices needed in the CTDA
 def prepare_sigma(data):
     num_trials = data.shape[0]
     num_channels = data.shape[1]
@@ -44,18 +48,8 @@ def prepare_sigma(data):
         print("Done with sigma.")
                 
     return sigma
-    
-def parallel_decode(wrap_part, num_trials, timesteps, instances):
-    cross_cos_amp = np.empty((num_trials, timesteps, timesteps))
-    
-    with multiprocessing.Pool(instances) as pool:
-        calcs = pool.imap(wrap_part, [trl for trl in range(num_trials)])
-        for trl in range(num_trials):
-            print("Trial " + str(trl+1) + "/" + str(num_trials), end='\r')
-            cross_cos_amp[trl, :, :] = next(calcs)
-                
-    return cross_cos_amp
 
+# Calculate a CTDA with GPU device_i
 def cross_decode(data, theta, bin_width, sigma=None, device_i=None):
     if sigma is None:
         sigma = prepare_sigma(data)
@@ -66,16 +60,11 @@ def cross_decode(data, theta, bin_width, sigma=None, device_i=None):
     num_trials, num_channels, timesteps = data.shape
     cross_cos_amp = np.empty((num_trials, timesteps, timesteps))
     
+    # Limit the visible GPUs to GPU device_i
     os.environ["CUDA_VISIBLE_DEVICES"]=str(device_i)
     
     import tensorflow as tf
     tf.config.experimental_run_functions_eagerly(False)
-    
-    print(tf.config.experimental.list_logical_devices('GPU'))
-    
-#     if len(tf.config.experimental.list_logical_devices('GPU')) != 1:
-#         gpus = tf.config.experimental.list_physical_devices('GPU')
-#         tf.config.experimental.set_visible_devices(gpus[device_i], 'GPU')
     
     with tf.device('/GPU:0'):
         delta = tf.Variable(tf.zeros([timesteps, num_channels], dtype='float64'))
@@ -94,8 +83,11 @@ def cross_decode(data, theta, bin_width, sigma=None, device_i=None):
             # dot(dot(delta, VI), delta.T).shape: timesteps by timesteps
             return tf.sqrt(tf.linalg.diag_part(tf.matmul(delta @ VI, delta, transpose_b=True)))
 
+        # Calculate time steps Mahalanobis distances for all time steps in parallel
         @tf.function
         def parallel(data, m, sigma):
+            # data: Transposed data except data[trl]
+            # m: bin data
             calc_dist_part = lambda x: mahalanobis(data, x[0], x[1])
             return tf.map_fn(calc_dist_part, 
                              (m, sigma), 
@@ -106,6 +98,7 @@ def cross_decode(data, theta, bin_width, sigma=None, device_i=None):
         cosines = np.expand_dims(np.cos(angspace), (1, 2))
         distances = np.empty((len(angspace), timesteps, timesteps))
         
+        # Calculate a CTDA for the trial trl
         def amps(trl):
             trn_dat = data[np.arange(num_trials) != trl, :, :]
             trn_angle = theta[np.arange(num_trials) != trl]
@@ -113,8 +106,10 @@ def cross_decode(data, theta, bin_width, sigma=None, device_i=None):
                 angle_dists = np.abs(np.angle(np.exp(1j*trn_angle) / np.exp(1j*(theta[trl] - angspace[b]))))
                 m = np.mean(trn_dat[angle_dists < bin_width, : , :], 0)
 
+                # A time steps by time steps grid of decodability scores for bin b
                 distances[b] = parallel(tf.constant(data[trl].T), tf.constant(m.T), tf.constant(sigma[trl]))
 
+            # Mean centre all decodability grids, convolve them with a cosine and average them to get a CTDA
             mean_centred = distances - np.mean(distances, 0)
             return -np.mean(cosines * mean_centred, 0)
         
